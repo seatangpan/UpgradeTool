@@ -117,9 +117,6 @@ void Widget::onConnectResp(quint8 result)
     timerConnect->stop();
     if (0x00 == result)
     {
-        serial->close();
-        serial->open(921600);
-
         ui->btn_connect->setText("断开连接");
         isConnected = true;
         enableUI(0xFF);
@@ -157,12 +154,11 @@ void Widget::onUpdateResp(quint16 result , QByteArray buffer)
         listUpdateFrame.pop_front();
         if (0x00 == buffer[0])
         {
+            serial->close();
+            serial->open(921600);
             emit sigalUpdateDataSend();
         }
-        else
-        {
-            emit sigalUpdateDataSend();
-        }
+
         enableUI(0xFC);
         if (timerUpgrade && !timerUpgrade->isActive())
         {
@@ -191,10 +187,14 @@ void Widget::onUpdateResp(quint16 result , QByteArray buffer)
         listUpdateFrame.pop_front();
         if (0x00 == buffer[0])
         {
+            serial->close();
+            serial->open(115200);
             ui->progressBar->setValue(100);
         }
         else
         {
+            serial->close();
+            serial->open(115200);
             ui->progressBar->setValue(100);
         }
         enableUI(0xFF);
