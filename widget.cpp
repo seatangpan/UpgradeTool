@@ -41,6 +41,8 @@ Widget::Widget(QWidget* parent)
     QObject::connect(this , SIGNAL(signalOutputLog(QString)) , ui->textEdit , SLOT(append(QString)));
     QObject::connect(serial , SIGNAL(signalMsgRead(QByteArray)) , this , SLOT(onMsgRead(QByteArray)));
     QObject::connect(this , SIGNAL(sigalUpdateDataSend()) , this , SLOT(onUpdateSend()));
+
+    ui->textEdit->document()->setMaximumBlockCount(1000);
 }
 
 Widget::~Widget()
@@ -117,6 +119,7 @@ void Widget::onConnectResp(quint8 result)
     timerConnect->stop();
     if (0x00 == result)
     {
+        ui->textEdit->clear();
         ui->btn_connect->setText("断开连接");
         isConnected = true;
         enableUI(0xFF);
@@ -145,59 +148,64 @@ void Widget::onUpdateResp(quint16 result , QByteArray buffer)
 {
     if (timerUpgrade && timerUpgrade->isActive())
     {
-        retryCnt = 0;
         timerUpgrade->stop();
     }
+
+    retryCnt = 0;
     
-    if (0x01 == result)
+    if (DM_TRANSFORM_START == result)
     {
-        listUpdateFrame.pop_front();
-        if (0x00 == buffer[0])
+        if (DM_TRANSFORM_STATUS_OK == buffer[0])
         {
-            serial->close();
-            serial->open(921600);
-            emit sigalUpdateDataSend();
-        }
-
-        enableUI(0xFC);
-        if (timerUpgrade && !timerUpgrade->isActive())
-        {
-            timerUpgrade->start(5000);
-        }
-    }
-    else if (0x02 == result)
-    {
-        listUpdateFrame.pop_front();
-        if (0x00 == buffer[0])
-        {
+            serial->setBaudRate(DM_BAUDRATE_921600);
             emit sigalUpdateDataSend();
         }
         else
         {
+            serial->setBaudRate(DM_BAUDRATE_921600);
             emit sigalUpdateDataSend();
         }
-
-        if (timerUpgrade && !timerUpgrade->isActive())
+        enableUI(0x00);
+    }
+    else if (DM_TRANSFORM_DATA == result)
+    {
+        if (DM_TRANSFORM_STATUS_OK == buffer[0])
         {
-            timerUpgrade->start(5000);
+            mutexSend.lock();
+            listUpdateFrame.pop_front();
+            mutexSend.unlock();
+            emit sigalUpdateDataSend();
+        }
+        else if (DM_TRANSFORM_STATUS_CHECKSUM_ERR == buffer[0])
+        {
+            emit sigalUpdateDataSend();
+        }
+        else if(DM_TRANSFORM_STATUS_FILE_OPEN_ERR == buffer[0])
+        {
+            onSerialDisconnectedResp();
         }
     }
-    else if (0x03 == result)
+    else if (DM_TRANSFORM_FINISH == result)
     {
+        mutexSend.lock();
         listUpdateFrame.pop_front();
-        if (0x00 == buffer[0])
+        mutexSend.unlock();
+        if (DM_TRANSFORM_STATUS_OK == buffer[0])
         {
-            serial->close();
-            serial->open(115200);
-            ui->progressBar->setValue(100);
+            qDebug() << "文件传输完成";
         }
-        else
+        else if(DM_TRANSFORM_STATUS_FILE_SIZE_ERR == buffer[0])
         {
-            serial->close();
-            serial->open(115200);
-            ui->progressBar->setValue(100);
+            qDebug() << "文件传输失败";
         }
+        else if (DM_TRANSFORM_STATUS_CRC_ERR == buffer[0])
+        {
+            qDebug() << "文件校验失败";
+        }
+        serial->setBaudRate(DM_BAUDRATE_115200);
+        ui->progressBar->setValue(100);
         enableUI(0xFF);
+        on_btn_upgrade_clicked();
     }
 }
 
@@ -247,12 +255,23 @@ void Widget::onSerialDisconnectedResp()
 
 void Widget::onUpdateSend()
 {
-    if (listUpdateFrame.size())
+    if (timerUpgrade && !timerUpgrade->isActive())
     {
-        float percent = 100 - (listUpdateFrame.size() * 100 + 1) / updateFrameCount;
+        timerUpgrade->start(1000);
+    }
+
+    mutexSend.lock();
+    qint32 framesize = listUpdateFrame.size();
+    mutexSend.unlock();
+    if (framesize)
+    {
+        float percent = 100 - (framesize * 100 + 1) / updateFrameCount;
         ui->progressBar->setValue(percent);
 
-        serial->update(listUpdateFrame.front());
+        mutexSend.lock();
+        QByteArray oneframe = listUpdateFrame.front();
+        serial->update(oneframe);
+        mutexSend.unlock();
     }
 }
 
@@ -299,7 +318,7 @@ void Widget::on_btn_connect_clicked()
         if (!result)
         {
             serial->close();
-            QMessageBox::information(this , "信息" , "打开串口失败" , QMessageBox::Ok);
+            qDebug() << "打开串口失败";
         }
         else
         {
@@ -316,7 +335,7 @@ void Widget::on_btn_connect_clicked()
                 {
                     if ("连接" == ui->btn_connect->text())
                     {
-                        QMessageBox::information(this , "信息" , "连接失败" , QMessageBox::Ok);
+                        qDebug() << "通信失败";
                         serial->close();
                     }
                 });
@@ -371,7 +390,9 @@ void Widget::on_btn_upgrade_clicked()
     updateStart[9] = (framecnt >> 8) & 0xFF;
     updateStart[10] = (framecnt >> 0) & 0xFF;
 
+    mutexSend.lock();
     listUpdateFrame.clear();
+    mutexSend.unlock();
 
     QFile file(filename);
     if (!file.open(QIODevice::ReadOnly))
@@ -397,7 +418,11 @@ void Widget::on_btn_upgrade_clicked()
         updateData[1] = (frameindex >> 8) & 0xFF;
         updateData[2] = (frameindex >> 0) & 0xFF;
         updateData.append(buffer.data() + pos , min(framesize , filesize - pos));
+
+        mutexSend.lock();
         listUpdateFrame.push_back(updateData);
+        mutexSend.unlock();
+
         pos += framesize;
         frameindex++;
     }
@@ -408,9 +433,11 @@ void Widget::on_btn_upgrade_clicked()
     updateStop.append((crc >> 16) & 0xFF);
     updateStop.append((crc >> 8) & 0xFF);
     updateStop.append(crc & 0xFF);
-    listUpdateFrame.push_back(updateStop);
 
+    mutexSend.lock();
+    listUpdateFrame.push_back(updateStop);
     updateFrameCount = listUpdateFrame.size();
+    mutexSend.unlock();
 
     serial->update(updateStart);
 
@@ -424,14 +451,15 @@ void Widget::on_btn_upgrade_clicked()
     connect(timerUpgrade , &QTimer::timeout , this , [=]()
         {
             retryCnt++;
-            if (retryCnt > 3)
+            if (retryCnt > 5)
             {
                 onSerialDisconnectedResp();
                 QMessageBox::information(this , "提示" , "通信失败" , QMessageBox::Ok);
             }
             else
             {
-                qInfo() << "sigalUpdateDataSend";
+                serial->clear();
+                //qDebug() << "sigalUpdateDataSend";
                 emit sigalUpdateDataSend();
             }
         });

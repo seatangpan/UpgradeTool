@@ -39,7 +39,11 @@ public:
     //打开串口
     bool open(const QString &sPort, const qint32 &nBaudrate);
 
-    bool open(const qint32& nBaudrate);
+    bool open(const qint32 &nBaudrate);
+
+    bool clear();
+
+    void setBaudRate(const qint32& nBaudrate);
 
     //关闭串口
     void close();
@@ -52,8 +56,6 @@ public:
 
     bool update(const QByteArray& buffer);
 
-protected:
-
     QString binary2String(const QByteArray &buffer);
 
 public slots:
@@ -62,8 +64,6 @@ public slots:
     void handleSerialError(QSerialPort::SerialPortError error);
 
     void readData();
-
-    void readyWrite();
 
     bool writeData(paramlist para, const QByteArray &buffer);
 
@@ -90,19 +90,17 @@ private:
 
     bool opened{false};
 
-    std::atomic_bool readyWriteen{ true };
+    std::mutex mutex;
 
     QSerialPort serialPort;
 
-    quint16 seq { 0x0001 };
-
-    QMutex mutex;
-
-    upgradeframe frame;
-
-    QString portName;
+    QString serialName;
 
     qint32 baudrate;
+
+    quint16 seq { 0x0001 };
+
+    upgradeframe *frame;
 };
 
 #endif // CSERIAL_H

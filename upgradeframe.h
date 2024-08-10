@@ -2,7 +2,10 @@
 #define UPGRADEFRAME_H
 
 #include <QObject>
-#include <qstack.h>
+#include <QString>
+#include <mutex>
+
+#define DM_UART_BLOCK_SIZE (32)
 
 enum class paramlist : quint16
 {
@@ -10,19 +13,33 @@ enum class paramlist : quint16
     HP10_CONNECT = 0x01 ,    //连接请求
     HP10_DISCONNECT ,        //断开请求
     HP10_READ_VERSION ,      //获取终端参数
-    HP10_WRITE_VERSION ,     //设置终端参数
-    HP10_READ_INFO ,         //获取车辆参数
-    HP10_WRIET_INFO ,        //设置车辆参数
     HP10_UPDATE ,            //终端升级
-    HP10_SELFCHECK ,         //测试结果查询
-    HP10_VOICE_TEST ,        //声音测试
-    HP10_REBOOT ,            //终端重启
-    HP10_TESTMODE ,          //测试命令
-    HP10_CALLTEST ,          //通话命令
 };
 
-class upgradeframe
+typedef enum
 {
+    DM_TRANSFORM_STATUS_OK ,
+    DM_TRANSFORM_STATUS_CHECKSUM_ERR ,
+    DM_TRANSFORM_STATUS_BLOCK_ERR ,
+    DM_TRANSFORM_STATUS_CRC_ERR ,
+    DM_TRANSFORM_STATUS_FILE_SIZE_ERR ,
+    DM_TRANSFORM_STATUS_FILE_OPEN_ERR ,
+    DM_TRANSFORM_STATUS_FILE_WRITE_ERR
+}DM_TRANSFORM_STATUS;
+
+typedef enum
+{
+    DM_TRANSFORM_START = 0x01 ,
+    DM_TRANSFORM_DATA ,
+    DM_TRANSFORM_FINISH
+}DM_TRANSFORM_CMDID;
+
+#define DM_BAUDRATE_115200 (115200)
+#define DM_BAUDRATE_921600 (921600)
+
+class upgradeframe : public QObject
+{
+    Q_OBJECT
     enum class DM_UART_RECV_PHASE : quint8
     {
         DM_UART_RECV_PHASE_PERFIX1 = 0x00 ,
@@ -39,7 +56,7 @@ class upgradeframe
     };
 
 public:
-    upgradeframe();
+    upgradeframe(QObject* parent);
     virtual ~upgradeframe();
 
     quint16 dmHandleMsg(const QByteArray &msg);
@@ -56,7 +73,10 @@ private:
     quint16 seq;
     quint16 len;
     quint32 cmdid;
-    QStack< QByteArray> framelist;
+    QList< QByteArray> framelist;
+    QTimer* timer{ nullptr };
+
+    std::mutex mutex;
 };
 
 #endif // UPGRADEFRAME_H

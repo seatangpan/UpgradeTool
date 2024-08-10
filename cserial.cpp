@@ -1,13 +1,14 @@
 #include "cserial.h"
+#include <thread>
 
 CSerial::CSerial(QObject *parent) : QObject(parent)
 {
-
+    frame = new upgradeframe(this);
 }
 
 CSerial::~CSerial()
 {
-
+    delete frame;
 }
 
 QList<QSerialPortInfo> CSerial::getCommNames()
@@ -51,13 +52,23 @@ bool CSerial::open(const QString &sPort, const qint32 &nBaudrate)
         close();
     }
 
-    portName = sPort;
-    serialPort.setPortName(sPort);
-    serialPort.setBaudRate(nBaudrate);
+    serialName = sPort;
+    baudrate = nBaudrate;
+
+    serialPort.setPortName(serialName);
+    serialPort.setBaudRate(baudrate);
+    serialPort.setDataBits(QSerialPort::Data8);
+    serialPort.setParity(QSerialPort::NoParity);
+    serialPort.setStopBits(QSerialPort::OneStop);
+    serialPort.setFlowControl(QSerialPort::NoFlowControl);
+
     opened = serialPort.open(QIODevice::ReadWrite);
+    if (!opened)
+    {
+        qDebug() << "Failed to open serial port:" << serialPort.errorString();
+    }
     serialPort.setDataTerminalReady(true);
     QObject::connect(&serialPort, SIGNAL(readyRead()), this, SLOT(readData()));
-    QObject::connect(&serialPort, SIGNAL(bytesWritten(qint64)), this, SLOT(readyWrite()));
     QObject::connect(&serialPort, static_cast<void (QSerialPort::*)(QSerialPort::SerialPortError)>(&QSerialPort::error),this, &CSerial::handleSerialError);
     qDebug() << QString("serial port:%1,Buadrate:%2, result:%3").arg(sPort).arg(nBaudrate).arg(opened?"OK":"NG");
     return opened;
@@ -65,7 +76,18 @@ bool CSerial::open(const QString &sPort, const qint32 &nBaudrate)
 
 bool CSerial::open(const qint32& nBaudrate)
 {
-    return open(portName, nBaudrate);
+    return open(serialName, nBaudrate);
+}
+
+bool CSerial::clear()
+{
+    serialPort.clear();
+    return true;
+}
+
+void CSerial::setBaudRate(const qint32& nBaudrate)
+{
+    serialPort.setBaudRate(nBaudrate);
 }
 
 void CSerial::close()
@@ -119,22 +141,16 @@ void CSerial::handleSerialError(QSerialPort::SerialPortError error)
 void CSerial::readData()
 {
     QByteArray frameData = serialPort.readAll();
+    frame->dmHandleMsg(frameData);
 
-    frame.dmHandleMsg(frameData);
-
-    QByteArray result = frame.getUpgradeFrame();
+    QByteArray result = frame->getUpgradeFrame();
 
     while (result.size())
     {
-        qDebug() << "recvData:" << binary2String(result);
+        //qDebug() << "recvData:" << binary2String(result);
         signalMsgRead(result);
-        result = frame.getUpgradeFrame();
+        result = frame->getUpgradeFrame();
     }
-}
-
-void CSerial::readyWrite()
-{
-    readyWriteen = true;
 }
 
 bool CSerial::writeData(paramlist para, const QByteArray &buffer)
@@ -163,20 +179,19 @@ bool CSerial::writeData(paramlist para, const QByteArray &buffer)
     seq++;
 
     QByteArray sendData((char *)transData, sendSize);
-    qDebug() << "SendData:" << binary2String(sendData);
+    //qDebug() << "SendData:" << binary2String(sendData);
 
-    mutex.lock();
     qint16 ret = 0;
     if(opened)
     {
-        while (!readyWriteen)
-        {
-            std::this_thread::sleep_for(std::chrono::milliseconds(10));
-        }
+        mutex.lock();
         ret = serialPort.write(sendData);
-        readyWriteen = false;
+        if (ret <= 0)
+        {
+            emit signalSerialDisconnected();
+        }
+        mutex.unlock();
     }
-    mutex.unlock();
 
     delete[] transData;
     return (ret > 0);

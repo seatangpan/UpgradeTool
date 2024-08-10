@@ -72,6 +72,8 @@ private:
 
     std::mutex mutex;
 
+    std::mutex mutexSend;
+
     QList<QByteArray> listUpdateFrame;
 
     std::atomic<quint32> updateFrameCount{ 0 };
